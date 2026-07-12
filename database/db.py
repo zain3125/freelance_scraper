@@ -116,3 +116,26 @@ def ignore_project(site: str, project_id: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def get_ignored_projects() -> list[dict[str, object]]:
+    """Return all projects where status = 'ignored', newest first."""
+    conn = _connect()
+    _ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM projects WHERE status = 'ignored' ORDER BY last_seen DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def restore_project(site: str, project_id: str) -> None:
+    """Restore an ignored project back to 'new' status."""
+    conn = _connect()
+    _ensure_schema(conn)
+    conn.execute(
+        "UPDATE projects SET status = 'new' WHERE site = ? AND project_id = ?",
+        (site, project_id),
+    )
+    conn.commit()
+    conn.close()
