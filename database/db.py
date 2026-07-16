@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS projects (
     published_at TEXT,
     score       INTEGER,
     status      TEXT    DEFAULT 'new',
+    is_open     INTEGER NOT NULL DEFAULT 1,
     first_seen  TEXT    NOT NULL,
     last_seen   TEXT    NOT NULL,
     UNIQUE(site, project_id)
@@ -40,6 +41,12 @@ def _connect() -> sqlite3.Connection:
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    # Migrate existing databases that lack the is_open column.
+    try:
+        conn.execute("ALTER TABLE projects ADD COLUMN is_open INTEGER NOT NULL DEFAULT 1")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists.
 
 
 def _now() -> str:
@@ -50,7 +57,7 @@ def _now() -> str:
 
 
 def save_project(project: Project, score: int) -> None:
-    """Insert or update a project.  Never resets an existing 'ignored' status."""
+    """Insert or update a project.  Sets is_open=1, preserves status."""
     conn = _connect()
     _ensure_schema(conn)
     now = _now()
@@ -58,8 +65,8 @@ def save_project(project: Project, score: int) -> None:
         """
         INSERT INTO projects
             (project_id, site, title, url, description, budget,
-             client, published_at, score, status, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
+             client, published_at, score, status, is_open, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', 1, ?, ?)
         ON CONFLICT(site, project_id) DO UPDATE SET
             title       = excluded.title,
             url         = excluded.url,
@@ -68,6 +75,7 @@ def save_project(project: Project, score: int) -> None:
             client      = excluded.client,
             published_at = excluded.published_at,
             score       = excluded.score,
+            is_open     = 1,
             last_seen   = excluded.last_seen
         """,
         (
@@ -88,19 +96,48 @@ def save_project(project: Project, score: int) -> None:
     conn.close()
 
 
-def get_active_projects() -> list[dict[str, object]]:
-    """Return all projects where status != 'ignored', newest first."""
+def reset_open_status() -> None:
+    """Set every project to is_open=0 before a new collection run."""
+    conn = _connect()
+    _ensure_schema(conn)
+    conn.execute("UPDATE projects SET is_open = 0")
+    conn.commit()
+    conn.close()
+
+
+def get_visible_projects() -> list[dict[str, object]]:
+    """Return projects that are new, open, and score >= threshold."""
     conn = _connect()
     _ensure_schema(conn)
     rows = conn.execute(
         """
-        SELECT *
-        FROM projects
-        WHERE status != 'ignored'
-        AND score >= ?
-        ORDER BY score DESC, last_seen DESC
+        SELECT * FROM projects
+        WHERE status = 'new' AND score >= ? AND is_open = 1
+        ORDER BY score DESC
         """,
-        (ACCEPT_THRESHOLD,)
+        (ACCEPT_THRESHOLD,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_applied_projects() -> list[dict[str, object]]:
+    """Return applied projects that are still open."""
+    conn = _connect()
+    _ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM projects WHERE status = 'applied' AND is_open = 1 ORDER BY last_seen DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_ignored_projects() -> list[dict[str, object]]:
+    """Return all ignored projects, newest first."""
+    conn = _connect()
+    _ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM projects WHERE status = 'ignored' ORDER BY last_seen DESC"
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -118,19 +155,20 @@ def ignore_project(site: str, project_id: str) -> None:
     conn.close()
 
 
-def get_ignored_projects() -> list[dict[str, object]]:
-    """Return all projects where status = 'ignored', newest first."""
+def mark_project_applied(site: str, project_id: str) -> None:
+    """Mark a project as applied."""
     conn = _connect()
     _ensure_schema(conn)
-    rows = conn.execute(
-        "SELECT * FROM projects WHERE status = 'ignored' ORDER BY last_seen DESC"
-    ).fetchall()
+    conn.execute(
+        "UPDATE projects SET status = 'applied' WHERE site = ? AND project_id = ?",
+        (site, project_id),
+    )
+    conn.commit()
     conn.close()
-    return [dict(r) for r in rows]
 
 
 def restore_project(site: str, project_id: str) -> None:
-    """Restore an ignored project back to 'new' status."""
+    """Restore an ignored or applied project back to 'new'."""
     conn = _connect()
     _ensure_schema(conn)
     conn.execute(
@@ -139,3 +177,18 @@ def restore_project(site: str, project_id: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def get_pipeline_stats() -> dict[str, int]:
+    """Return counts for pipeline logging."""
+    conn = _connect()
+    _ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT status, is_open, COUNT(*) as cnt FROM projects GROUP BY status, is_open"
+    ).fetchall()
+    conn.close()
+    stats: dict[str, int] = {}
+    for r in rows:
+        key = f"{r['status']}_{'open' if r['is_open'] else 'closed'}"
+        stats[key] = r["cnt"]
+    return stats

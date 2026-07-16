@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+import time
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -8,6 +10,8 @@ from urllib.parse import urlencode
 
 from config import MOSTAQL_PROJECTS_URL, MOSTAQL_SKILLS
 from models import Project
+
+log = logging.getLogger(__name__)
 
 SITE_NAME = "mostaql"
 
@@ -53,18 +57,28 @@ def collect() -> list[Project]:
 
 
 def _download_page(url: str) -> str:
-    """Download the projects page and return raw HTML."""
+    """Download the projects page with retry and exponential backoff."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         )
     }
-    client = httpx.Client(follow_redirects=True, timeout=15, headers=headers)
-    with client:
-        response = client.get(url)
-        response.raise_for_status()
-        return response.text
+    timeouts = httpx.Timeout(30, connect=10)
+    for attempt in range(3):
+        try:
+            client = httpx.Client(follow_redirects=True, timeout=timeouts, headers=headers)
+            with client:
+                response = client.get(url)
+                response.raise_for_status()
+                return response.text
+        except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+            if attempt == 2:
+                log.error("Mostaql request failed after 3 attempts: %s", exc)
+                raise
+            delay = 2 ** attempt
+            log.warning("Mostaql request failed (attempt %d), retrying in %ds: %s", attempt + 1, delay, exc)
+            time.sleep(delay)
 
 
 def _parse_project_cards(html: str) -> list[Project]:

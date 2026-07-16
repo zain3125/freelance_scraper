@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Active Projects{% endblock %}
+{% block content %}
+<div class="meta"><span>{{ projects|length }} active</span></div>
+{% if not projects %}
+<div class="empty">
+  <h2>No active projects</h2>
+  <p>Run <code>python main.py</code> to collect new projects.</p>
+</div>
+{% endif %}
+{% for p in projects %}
+<article>
+  <div class="card-header">
+    <span class="score badge-{{ p.color }}">{{ p.score }}</span>
+    <h2><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.title }}</a></h2>
+  </div>
+  <div class="card-meta">
+    <span class="site">{{ p.site }}</span>
+    {% if p.budget %}<span class="budget">{{ p.budget }}</span>{% endif %}
+    {% if p.published_at %}<span class="date">{{ p.published_at }}</span>{% endif %}
+    {% if p.client %}<span class="client">{{ p.client }}</span>{% endif %}
+  </div>
+  <p class="desc">{{ p.description }}</p>
+  {% if p.matched %}
+  <div class="keywords positive">
+    {% for k in p.matched %}<span>+{{ k }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  {% if p.rejected %}
+  <div class="keywords negative">
+    {% for k in p.rejected %}<span>&minus;{{ k }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  <div class="actions">
+    <form method="POST" action="/apply/{{ p.site }}/{{ p.project_id }}">
+      <button type="submit" class="btn btn-applied">Applied</button>
+    </form>
+    <form method="POST" action="/ignore/{{ p.site }}/{{ p.project_id }}">
+      <button type="submit" class="btn btn-ignore">Ignore</button>
+    </form>
+  </div>
+</article>
+{% endfor %}
+{% endblock %}

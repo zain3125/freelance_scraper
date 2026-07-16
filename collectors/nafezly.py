@@ -1,11 +1,16 @@
 from __future__ import annotations
+import logging
 import re
+import time
+
 import httpx
 from selectolax.parser import HTMLParser
 from urllib.parse import urlencode
 
 from config import NAFEZLY_PROJECTS_URL, NAFEZLY_SKILLS
 from models import Project
+
+log = logging.getLogger(__name__)
 
 SITE_NAME = "nafezly"
 
@@ -72,10 +77,20 @@ def collect() -> list[Project]:
     return all_projects
 
 def _download_page(url: str) -> str:
-    """Download the projects page and return raw HTML."""
-    response = httpx.get(url, follow_redirects=True)
-    response.raise_for_status()
-    return response.text
+    """Download the projects page with retry and exponential backoff."""
+    timeouts = httpx.Timeout(30, connect=10)
+    for attempt in range(3):
+        try:
+            response = httpx.get(url, follow_redirects=True, timeout=timeouts)
+            response.raise_for_status()
+            return response.text
+        except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+            if attempt == 2:
+                log.error("Nafezly request failed after 3 attempts: %s", exc)
+                raise
+            delay = 2 ** attempt
+            log.warning("Nafezly request failed (attempt %d), retrying in %ds: %s", attempt + 1, delay, exc)
+            time.sleep(delay)
 
 def _parse_project_cards(html: str) -> list[Project]:
     """Parse all project cards from HTML into Project objects."""
