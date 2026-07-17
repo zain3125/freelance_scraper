@@ -2,3 +2,4 @@ freelance-venv/
 freelance.db
 __pycache__
 .ruff_cache
+report.html
